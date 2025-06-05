@@ -25,8 +25,8 @@ Before running this application, make sure you have the following installed:
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
-   cd transcription_live_two_models
+   git clone https://github.com/Deepak1520/Real-Time-Speech-Transcription.git
+   cd Real-Time-Speech-Transcription
    ```
 
 2. **Install Node.js dependencies**
