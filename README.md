@@ -1,8 +1,8 @@
-# Real-Time Speech-to-Text Transcription
+# 🎤 Real-Time Speech-to-Text Transcription
 
 This is a simple web app that converts your speech to text in real-time. Speak into your microphone and transcription appears on screen.
 
-## AI Models
+## Models
 
 ### Whisper
 OpenAI's Whisper is a robust automatic speech recognition (ASR) model trained on diverse audio data. It provides high accuracy across multiple languages and handles various audio conditions well, making it ideal for general-purpose transcription tasks.
