@@ -34,11 +34,10 @@ Before running this application, make sure you have the following installed:
    npm install
    ```
 
-3. **Install Python dependencies** (you may need to install additional Python packages for the backend)
+3. **Install Python dependencies**
    ```bash
    pip install -r requirements.txt
    ```
-   *Note: If requirements.txt doesn't exist, you'll need to install the necessary Python packages for speech recognition and WebSocket handling.*
 
 ### Running the Application
 
