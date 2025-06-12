@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import useWebSocket from 'react-use-websocket';
 
-const AudioRecorder = ({ onTranscription, onRecordingStateChange }) => {
-    const [isRecording, setIsRecording] = useState(false);
+const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: externalIsRecording, onToggleRecording }) => {
+    const [isRecording, setIsRecording] = useState(externalIsRecording || false);
     const [status, setStatus] = useState('ready');
     const [error, setError] = useState(null);
     const mediaRecorder = useRef(null);
@@ -11,19 +11,119 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange }) => {
     const audioData = useRef([]);
     const sendIntervalRef = useRef(null);
     
-    // Optimized settings to match enhanced backend (300ms chunks)
-    const CHUNK_SIZE_MS = 300; // Updated to match backend optimization
+    // 300ms chunks work well with Whisper
+    const CHUNK_SIZE_MS = 300;
     const SAMPLE_RATE = 16000;
-    const CHUNK_SIZE_SAMPLES = Math.floor((SAMPLE_RATE * CHUNK_SIZE_MS) / 1000); // 4800 samples
+    const CHUNK_SIZE_SAMPLES = Math.floor((SAMPLE_RATE * CHUNK_SIZE_MS) / 1000);
     
-    // Notify parent component of recording state changes
+    const startRecordingHandler = async () => {
+        try {
+            setError(null);
+            audioData.current = [];
+            
+            // Setup audio context
+            audioContext.current = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: SAMPLE_RATE,
+                latencyHint: 'interactive',
+            });
+            
+            // Get microphone access
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    channelCount: 1,
+                    sampleRate: SAMPLE_RATE,
+                    latency: 0.01,
+                    googEchoCancellation: true,
+                    googAutoGainControl: true,
+                    googNoiseSuppression: true,
+                    googHighpassFilter: true,
+                    googTypingNoiseDetection: true,
+                    googAudioMirroring: false
+                }
+            });
+            
+            mediaRecorder.current = { stream };
+            
+            const sourceNode = audioContext.current.createMediaStreamSource(stream);
+            
+            // Small buffer = lower latency
+            const bufferSize = 1024;
+            audioProcessor.current = audioContext.current.createScriptProcessor(bufferSize, 1, 1);
+            
+            audioProcessor.current.onaudioprocess = (e) => {
+                const inputData = e.inputBuffer.getChannelData(0);
+                audioData.current.push(...inputData);
+                processAudioData();
+            };
+            
+            sourceNode.connect(audioProcessor.current);
+            audioProcessor.current.connect(audioContext.current.destination);
+            
+            // Fallback timer in case onaudioprocess misses something
+            sendIntervalRef.current = setInterval(() => {
+                processAudioData();
+            }, CHUNK_SIZE_MS / 2);
+            
+            setIsRecording(true);
+            setStatus('recording');
+        } catch (error) {
+            console.error('Error accessing microphone:', error);
+            setError('Could not access microphone');
+            setStatus('error');
+        }
+    };
+
+    const stopRecordingHandler = () => {
+        // Stop the timer
+        if (sendIntervalRef.current) {
+            clearInterval(sendIntervalRef.current);
+            sendIntervalRef.current = null;
+        }
+        
+        // Clean up audio stuff
+        if (audioProcessor.current) {
+            audioProcessor.current.disconnect();
+            audioProcessor.current = null;
+        }
+        if (audioContext.current) {
+            if (audioContext.current.state !== 'closed') {
+                audioContext.current.close();
+            }
+            audioContext.current = null;
+        }
+        // Stop mic
+        if (mediaRecorder.current && mediaRecorder.current.stream) {
+            mediaRecorder.current.stream.getTracks().forEach(track => {
+                track.stop();
+            });
+        }
+        audioData.current = [];
+        setIsRecording(false);
+        setStatus('ready');
+    };
+
+    // Keep in sync with parent component
+    useEffect(() => {
+        if (externalIsRecording !== undefined && externalIsRecording !== isRecording) {
+            if (externalIsRecording) {
+                startRecordingHandler();
+            } else {
+                stopRecordingHandler();
+            }
+        }
+    }, [externalIsRecording, isRecording]);
+
+    // Tell parent when recording state changes
     useEffect(() => {
         if (onRecordingStateChange) {
             onRecordingStateChange(isRecording);
         }
     }, [isRecording, onRecordingStateChange]);
     
-    const { sendMessage, lastMessage, readyState } = useWebSocket('ws://localhost:8000/ws', {
+    const { sendMessage, lastMessage, readyState } = useWebSocket('ws://localhost:61999/ws', {
         onOpen: () => {
             console.log('WebSocket Connected');
             setStatus('connected');
@@ -61,119 +161,25 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange }) => {
         };
     }, []);
 
-    // Optimized audio processing with smaller, more frequent chunks
+    // Send data when we have enough
     const processAudioData = () => {
         if (audioData.current.length >= CHUNK_SIZE_SAMPLES) {
             const audioToSend = new Float32Array(audioData.current.slice(0, CHUNK_SIZE_SAMPLES));
             
-            // Send immediately for lower latency
-            if (readyState === 1) { // WebSocket.OPEN
+            // Send if websocket is ready
+            if (readyState === 1) {
                 sendMessage(audioToSend.buffer);
             }
             
-            // Remove processed samples
+            // Remove what we just sent
             audioData.current = audioData.current.slice(CHUNK_SIZE_SAMPLES);
         }
-    };
-
-    const startRecording = async () => {
-        try {
-            setError(null);
-            audioData.current = [];
-            
-            // WebRTC-optimized audio context settings
-            audioContext.current = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: SAMPLE_RATE,
-                latencyHint: 'interactive', // WebRTC optimization for low latency
-            });
-            
-            // WebRTC-style audio constraints for optimal real-time performance
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 1,
-                    sampleRate: SAMPLE_RATE,
-                    // WebRTC optimizations
-                    latency: 0.01, // 10ms latency target
-                    googEchoCancellation: true,
-                    googAutoGainControl: true,
-                    googNoiseSuppression: true,
-                    googHighpassFilter: true,
-                    googTypingNoiseDetection: true,
-                    googAudioMirroring: false
-                }
-            });
-            
-            // Store stream reference for cleanup
-            mediaRecorder.current = { stream };
-            
-            const sourceNode = audioContext.current.createMediaStreamSource(stream);
-            
-            // Use smaller buffer size for lower latency (WebRTC style)
-            const bufferSize = 1024; // Smaller buffer for lower latency
-            audioProcessor.current = audioContext.current.createScriptProcessor(bufferSize, 1, 1);
-            
-            audioProcessor.current.onaudioprocess = (e) => {
-                const inputData = e.inputBuffer.getChannelData(0);
-                audioData.current.push(...inputData);
-                
-                // Process immediately when we have enough data
-                processAudioData();
-            };
-            
-            // Connect the nodes
-            sourceNode.connect(audioProcessor.current);
-            audioProcessor.current.connect(audioContext.current.destination);
-            
-            // Set up interval to ensure regular processing even with variable input
-            sendIntervalRef.current = setInterval(() => {
-                processAudioData();
-            }, CHUNK_SIZE_MS / 2); // Check twice per chunk duration for responsiveness
-            
-            setIsRecording(true);
-            setStatus('recording');
-        } catch (error) {
-            console.error('Error accessing microphone:', error);
-            setError('Could not access microphone');
-            setStatus('error');
-        }
-    };
-
-    const stopRecording = () => {
-        // Clear the send interval
-        if (sendIntervalRef.current) {
-            clearInterval(sendIntervalRef.current);
-            sendIntervalRef.current = null;
-        }
-        
-        if (audioProcessor.current) {
-            audioProcessor.current.disconnect();
-            audioProcessor.current = null;
-        }
-        if (audioContext.current) {
-            // Get all tracks from the audio context source
-            if (audioContext.current.state !== 'closed') {
-                audioContext.current.close();
-            }
-            audioContext.current = null;
-        }
-        // Stop all media tracks
-        if (mediaRecorder.current && mediaRecorder.current.stream) {
-            mediaRecorder.current.stream.getTracks().forEach(track => {
-                track.stop();
-            });
-        }
-        audioData.current = [];
-        setIsRecording(false);
-        setStatus('ready');
     };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '1rem' }}>
             <button
-                onClick={isRecording ? stopRecording : startRecording}
+                onClick={onToggleRecording || (isRecording ? stopRecordingHandler : startRecordingHandler)}
                 style={{
                     padding: '1rem 2rem',
                     backgroundColor: isRecording ? '#ef4444' : '#ef4444',

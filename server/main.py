@@ -9,28 +9,28 @@ import time
 app = FastAPI()
 
 print("Loading Whisper model...")
-# Optimized model for M3 Mac with better accuracy
+# small.en works well for English
 model = WhisperModel(
-    "small.en",  # 25% faster than base.en with better accuracy
+    "small.en",
     device="cpu", 
     compute_type="int8",
-    cpu_threads=8,  # M3 has excellent multi-core performance
-    num_workers=4   # Parallel processing for M3
+    cpu_threads=8,
+    num_workers=4
 )
 print("Enhanced Whisper model (small.en) loaded and ready!")
 
-# Optimized buffer settings for M3 Mac performance
+# Audio settings
 SAMPLE_RATE = 16000
-CHUNK_DURATION_MS = 300  # Optimized for Whisper's 30ms frame size
-CHUNK_SIZE_SAMPLES = int(SAMPLE_RATE * CHUNK_DURATION_MS / 1000)  # 4800 samples
-PROCESSING_WINDOW_MS = 1200  # Matches Whisper's optimal context
-PROCESSING_WINDOW_SAMPLES = int(SAMPLE_RATE * PROCESSING_WINDOW_MS / 1000)  # 19200 samples
-OVERLAP_DURATION_MS = 150  # Optimized overlap for 300ms chunks
+CHUNK_DURATION_MS = 300
+CHUNK_SIZE_SAMPLES = int(SAMPLE_RATE * CHUNK_DURATION_MS / 1000)
+PROCESSING_WINDOW_MS = 1200
+PROCESSING_WINDOW_SAMPLES = int(SAMPLE_RATE * PROCESSING_WINDOW_MS / 1000)
+OVERLAP_DURATION_MS = 150
 OVERLAP_SIZE = int(SAMPLE_RATE * OVERLAP_DURATION_MS / 1000)
-BASE_ENERGY_THRESHOLD = 0.003  # Fallback threshold
-SILENCE_CHUNKS_LIMIT = 8  # Reset context after silent chunks
+BASE_ENERGY_THRESHOLD = 0.003
+SILENCE_CHUNKS_LIMIT = 8
 
-# Per-connection state optimized for smaller chunks
+# Keep track of each connection
 class ConnectionState:
     def __init__(self):
         self.audio_buffer = np.array([], dtype=np.float32)
@@ -47,32 +47,33 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connection_id = id(websocket)
     connections[connection_id] = ConnectionState()
+    state = connections[connection_id]
+    
+    print("WebSocket connection opened")
     
     try:
         while True:
-            audio_data = await websocket.receive_bytes()
-            
             try:
-                # Convert to numpy array
-                audio = np.frombuffer(audio_data, dtype=np.float32)
-                state = connections[connection_id]
+                # Get audio chunk
+                message = await websocket.receive_bytes()
+                audio_chunk = np.frombuffer(message, dtype=np.float32)
+                
+                # Buffer it
+                state.audio_buffer = np.concatenate([state.audio_buffer, audio_chunk])
                 state.chunks_received += 1
                 
-                # Accumulate audio data
-                state.audio_buffer = np.concatenate((state.audio_buffer, audio))
-                
-                # Process when we have enough data (1 second worth) or every 4 chunks (1 second)
-                should_process = (
-                    len(state.audio_buffer) >= PROCESSING_WINDOW_SAMPLES or
-                    (state.chunks_received % 4 == 0 and len(state.audio_buffer) >= CHUNK_SIZE_SAMPLES * 2)  # At least 500ms
-                )
+                # Should we process yet?
+                current_time = time.time()
+                has_enough_data = len(state.audio_buffer) >= PROCESSING_WINDOW_SAMPLES
+                time_since_last = current_time - state.last_processing_time
+                should_process = has_enough_data or (time_since_last > 2.0 and len(state.audio_buffer) > 0)
                 
                 if should_process:
-                    # Determine processing chunk size
+                    # Get chunk to transcribe
                     processing_size = min(len(state.audio_buffer), PROCESSING_WINDOW_SAMPLES)
                     audio_chunk = state.audio_buffer[:processing_size]
                     
-                    # Check for speech activity with adjusted threshold for smaller chunks
+                    # Check if there's actual speech
                     audio_energy = np.sqrt(np.mean(audio_chunk**2))
                     has_speech = audio_energy > calculate_dynamic_threshold(audio_chunk)
                     
@@ -80,32 +81,31 @@ async def websocket_endpoint(websocket: WebSocket):
                         state.silent_chunks_count = 0
                         state.last_speech_time = time.time()
                         
-                        # Enhanced transcription settings for M3 Mac optimization
+                        # Run whisper
                         segments, info = model.transcribe(
                             audio_chunk,
-                            beam_size=2,              # Better quality with minimal latency impact
-                            best_of=2,                # Improved candidate selection
-                            temperature=0.0,          # Deterministic
-                            compression_ratio_threshold=2.2,  # Stricter filtering
+                            beam_size=2,
+                            best_of=2,
+                            temperature=0.0,
+                            compression_ratio_threshold=2.2,
                             condition_on_previous_text=False,
-                            no_speech_threshold=0.4,  # More sensitive speech detection
-                            word_timestamps=False,    # Disable for speed
+                            no_speech_threshold=0.4,
+                            word_timestamps=False,
                             language="en",
-                            vad_filter=True,          # Enable VAD filtering
+                            vad_filter=True,
                             vad_parameters={
-                                "threshold": 0.3,     # More sensitive VAD
-                                "min_speech_duration_ms": 200,  # Adjusted for 300ms chunks
+                                "threshold": 0.3,
+                                "min_speech_duration_ms": 200,
                                 "max_speech_duration_s": 30,
                                 "min_silence_duration_ms": 100,
                                 "speech_pad_ms": 30
                             }
                         )
                         
-                        # Process segments with enhanced filtering
+                        # Send back results
                         for segment in segments:
                             text = segment.text.strip()
                             
-                            # Enhanced filtering with confidence and phoneme detection
                             if should_send_text_enhanced(text, info, state.previous_text):
                                 await websocket.send_json({
                                     "text": text,
@@ -121,11 +121,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     
                     else:
                         state.silent_chunks_count += 1
-                        # Reset context after prolonged silence (2 seconds with 250ms chunks)
+                        # Reset after too much silence
                         if state.silent_chunks_count >= SILENCE_CHUNKS_LIMIT:
                             state.previous_text = ""
                     
-                    # Update buffer with overlap for smaller chunks
+                    # Keep some overlap for next chunk
                     if len(state.audio_buffer) > OVERLAP_SIZE:
                         state.audio_buffer = state.audio_buffer[processing_size - OVERLAP_SIZE:]
                     else:
@@ -147,79 +147,45 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
 
-def should_send_text(text: str, previous_text: str) -> bool:
-    """Enhanced filtering to prevent repetition and false positives for 250ms chunks"""
-    if not text or len(text.strip()) < 2:
-        return False
+def calculate_dynamic_threshold(audio_chunk):
+    """Figure out speech threshold based on current audio"""
+    if len(audio_chunk) == 0:
+        return BASE_ENERGY_THRESHOLD
     
-    # Common false positives during silence or noise (expanded for smaller chunks)
-    false_positives = {
-        "thank you", "thank you very much", "thanks", "you", "yeah", "yes", 
-        "no", "oh", "um", "uh", "ah", "hmm", "okay", "ok", "well", "so",
-        "the", "a", "and", "but", "or", "is", "was", "are", "were", "i",
-        "it", "that", "this", "with", "for", "on", "at", "by", "from"
-    }
+    # Use percentile for adaptive threshold
+    energy_percentile = np.percentile(np.abs(audio_chunk), 85)
+    adaptive_threshold = max(BASE_ENERGY_THRESHOLD, energy_percentile * 0.3)
     
-    if text.lower().strip() in false_positives:
-        return False
-    
-    # More aggressive filtering for very short text from 250ms chunks
-    if len(text.split()) == 1 and len(text) < 4:
-        return False
-    
-    # Check for repetition (simple similarity check)
-    if previous_text and text.lower() in previous_text.lower():
-        return False
-    
-    # Check if it's mostly the same as previous text
-    if previous_text:
-        common_words = set(text.lower().split()) & set(previous_text.lower().split())
-        if len(common_words) >= len(text.split()) * 0.8:  # 80% overlap for smaller chunks
-            return False
-    
-    return True
+    return min(adaptive_threshold, BASE_ENERGY_THRESHOLD * 3)
 
-def should_send_text_enhanced(text: str, info, previous_text: str) -> bool:
-    """Enhanced filtering with confidence and phoneme detection"""
+def should_send_text_enhanced(text, info, previous_text):
+    """Filter out junk transcriptions"""
     if not text or len(text.strip()) < 2:
         return False
     
-    # Confidence threshold - reject low confidence transcriptions
-    if info.language_probability < 0.85:
-        return False
+    text_lower = text.lower().strip()
     
-    # Phoneme-based filtering (catches partial words and speech artifacts)
-    phoneme_artifacts = ['mm', 'uh', 'ah', 'hmm', 'er', 'em', 'mhmm']
-    if any(artifact in text.lower() for artifact in phoneme_artifacts):
-        return False
-    
-    # Common false positives during silence or noise
-    false_positives = {
-        "thank you", "thank you very much", "thanks", "you", "yeah", "yes", 
-        "no", "oh", "um", "uh", "ah", "hmm", "okay", "ok", "well", "so",
-        "the", "a", "and", "but", "or", "is", "was", "are", "were", "i",
-        "it", "that", "this", "with", "for", "on", "at", "by", "from"
+    # Common filler words that whisper picks up
+    filler_words = {
+        "thank you", "thanks", "you", "yeah", "yes", "no", "oh", "um", "uh", "ah", 
+        "hmm", "okay", "ok", "well", "so", "the", "a", "and", "but", "or", 
+        "is", "was", "are", "were", "i", "it", "that", "this"
     }
     
-    if text.lower().strip() in false_positives:
+    if text_lower in filler_words:
         return False
     
-    # Aggressive filtering for very short text
+    # Skip really short stuff
     if len(text.split()) == 1 and len(text) < 4:
         return False
     
-    # Check for repetition with previous text
-    if previous_text and text.lower() in previous_text.lower():
+    # Don't repeat the same thing
+    if previous_text and text_lower == previous_text.lower().strip():
         return False
     
-    # Check word overlap percentage
-    if previous_text:
-        current_words = set(text.lower().split())
-        previous_words = set(previous_text.lower().split())
-        if len(current_words) > 0:
-            overlap = len(current_words & previous_words) / len(current_words)
-            if overlap > 0.7:  # More than 70% overlap
-                return False
+    # Check confidence
+    if hasattr(info, 'language_probability') and info.language_probability < 0.7:
+        return False
     
     return True
 
@@ -236,19 +202,6 @@ async def get_config():
         "optimization": "250ms_chunks_webrtc"
     }
 
-def calculate_dynamic_threshold(audio_chunk: np.ndarray) -> float:
-    """Calculate dynamic energy threshold based on audio content"""
-    if len(audio_chunk) == 0:
-        return BASE_ENERGY_THRESHOLD
-    
-    # Use 80th percentile for adaptive threshold
-    abs_audio = np.abs(audio_chunk)
-    percentile_80 = np.percentile(abs_audio, 80)
-    dynamic_threshold = percentile_80 * 1.5
-    
-    # Ensure threshold is within reasonable bounds
-    return max(BASE_ENERGY_THRESHOLD, min(dynamic_threshold, 0.02))
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=61999, log_level="info")

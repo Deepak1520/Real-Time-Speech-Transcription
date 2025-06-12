@@ -3,12 +3,15 @@
 import { useState } from 'react';
 import AudioRecorder from '../components/AudioRecorder';
 import PerformanceMonitor from '../components/PerformanceMonitor';
+import DetachableWrapper from '../components/DetachableWrapper';
 
 export default function Home() {
   const [transcription, setTranscription] = useState('');
   const [error, setError] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [performanceMetrics, setPerformanceMetrics] = useState(null);
+  const [detached, setDetached] = useState(false);
+  const [globalRecordingState, setGlobalRecordingState] = useState(false);
 
   const handleTranscription = (text) => {
     setTranscription(prev => prev + ' ' + text);
@@ -20,6 +23,14 @@ export default function Home() {
 
   const handleMetricsUpdate = (metrics) => {
     setPerformanceMetrics(metrics);
+  };
+
+  const handleDetachChange = (isDetached) => {
+    setDetached(isDetached);
+  };
+
+  const handleToggleRecording = () => {
+    setGlobalRecordingState(prev => !prev);
   };
 
   const clearTranscription = () => {
@@ -42,6 +53,7 @@ export default function Home() {
     const filename = `transcription_${timestamp}.${format}`;
     
     if (format === 'txt') {
+      // Download as text file
       const blob = new Blob([transcription], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -52,6 +64,7 @@ export default function Home() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } else if (format === 'pdf') {
+      // Print to PDF
       const pdfContent = `
         <html>
           <head>
@@ -100,26 +113,68 @@ export default function Home() {
           fontSize: '2rem', 
           fontWeight: 'bold', 
           color: '#111827', 
-          marginBottom: '1rem' 
+          marginBottom: '1rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '0.5rem'
         }}>
           RealTime Transcription
+          {detached && (
+            <span style={{
+              fontSize: '0.875rem',
+              backgroundColor: '#fbbf24',
+              color: '#92400e',
+              padding: '0.25rem 0.75rem',
+              borderRadius: '9999px',
+              fontWeight: '500'
+            }}>
+              🔗 Detached
+            </span>
+          )}
+          {globalRecordingState && (
+            <span style={{
+              fontSize: '0.875rem',
+              backgroundColor: '#ef4444',
+              color: 'white',
+              padding: '0.25rem 0.75rem',
+              borderRadius: '9999px',
+              fontWeight: '500',
+              animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite'
+            }}>
+              🎤 Recording
+            </span>
+          )}
         </h1>
         
-        {/* Audio Recorder Component */}
-        <div style={{ marginBottom: '1rem' }}>
-          <AudioRecorder 
-            onTranscription={handleTranscription} 
-            onRecordingStateChange={handleRecordingStateChange}
-          />
+        {/* Main recorder */}
+        <div style={{ 
+          marginBottom: '2rem',
+          padding: '1.5rem',
+          backgroundColor: 'white',
+          borderRadius: '0.75rem',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+          border: '1px solid #e2e8f0'
+        }}>
+          <DetachableWrapper onDetachChange={handleDetachChange} transcription={transcription}>
+            <AudioRecorder 
+              onTranscription={handleTranscription} 
+              onRecordingStateChange={handleRecordingStateChange}
+              isRecording={globalRecordingState}
+              onToggleRecording={handleToggleRecording}
+            />
+          </DetachableWrapper>
         </div>
 
-        {/* Performance Monitor */}
-        <PerformanceMonitor 
-          isRecording={isRecording} 
-          onMetricsUpdate={handleMetricsUpdate}
-        />
+        {/* Performance monitor - hidden when detached */}
+        {!detached && (
+          <PerformanceMonitor 
+            isRecording={isRecording} 
+            onMetricsUpdate={handleMetricsUpdate}
+          />
+        )}
 
-        {/* Error Display */}
+        {/* Errors */}
         {error && (
           <div style={{
             marginBottom: '1.5rem',
@@ -133,43 +188,46 @@ export default function Home() {
           </div>
         )}
 
-        {/* Transcription Box */}
-        <div style={{
-          backgroundColor: 'white',
-          border: '1px solid #d1d5db',
-          borderRadius: '0.5rem',
-          padding: '1.5rem',
-          marginBottom: '1.5rem',
-          marginTop: '1.5rem',
-          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-          width: '100%'
-        }}>
+        {/* Transcription box - hidden when detached */}
+        {!detached && (
           <div style={{
-            minHeight: '200px',
-            width: '100%',
-            padding: '1rem',
-            backgroundColor: '#f9fafb',
-            border: '1px solid #e5e7eb',
-            borderRadius: '0.25rem',
-            color: '#111827',
-            textAlign: 'left',
-            boxSizing: 'border-box',
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'flex-start'
+            backgroundColor: 'white',
+            border: '1px solid #d1d5db',
+            borderRadius: '0.5rem',
+            padding: '1.5rem',
+            marginBottom: '1.5rem',
+            marginTop: '1.5rem',
+            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+            width: '100%'
           }}>
-            <div style={{ width: '100%' }}>
-              {transcription || (
-                <span style={{ color: '#6b7280', fontStyle: 'italic' }}>
-                  Your transcription will appear here...
-                </span>
-              )}
+            <div style={{
+              minHeight: '200px',
+              width: '100%',
+              padding: '1rem',
+              backgroundColor: '#f9fafb',
+              border: '1px solid #e5e7eb',
+              borderRadius: '0.25rem',
+              color: '#111827',
+              textAlign: 'left',
+              boxSizing: 'border-box',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'flex-start'
+            }}>
+              <div style={{ width: '100%' }}>
+                {transcription || (
+                  <span style={{ color: '#6b7280', fontStyle: 'italic' }}>
+                    Your transcription will appear here...
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Action Buttons */}
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        {/* Save buttons - hidden when detached */}
+        {!detached && (
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <button
             onClick={() => saveAsFile('txt')}
             disabled={!transcription}
@@ -263,6 +321,7 @@ export default function Home() {
             Clear
           </button>
         </div>
+        )}
       </div>
     </div>
   );
