@@ -6,6 +6,8 @@ This is a simple web app that converts your speech to text in real-time. Speak i
 
 ✅ **Real-time transcription** - Live speech-to-text conversion  
 ✅ **Detachable window** - Separate transcription window for meetings  
+✅ **Multi-language support** - Transcribe in different languages(English and German) 
+✅ **Translation** - Translate speech directly to English  
 
 
 ## Models
@@ -73,6 +75,14 @@ Once the application is running:
 3. Open your web browser and navigate to the frontend URL
 4. Allow microphone permissions when prompted
 5. Start speaking to see real-time transcription
+
+## 🌐 Language Options
+
+### Transcription
+You can transcribe speech in multiple languages. Select your language  before starting. The transcription will appear in the selected language.
+
+### Translation
+Any language to English
 
 ## 💾 Save Options
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import useWebSocket from 'react-use-websocket';
 
-const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: externalIsRecording, onToggleRecording }) => {
+const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: externalIsRecording, onToggleRecording, mode = 'transcription', transcriptionLanguage = 'en' }) => {
     const [isRecording, setIsRecording] = useState(externalIsRecording || false);
     const [status, setStatus] = useState('ready');
     const [error, setError] = useState(null);
@@ -137,7 +137,8 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: e
             const data = JSON.parse(event.data);
             if (data.text && data.text.trim()) {
                 onTranscription(data.text.trim());
-                setStatus(`Detected: ${data.language} (${(data.language_probability * 100).toFixed(1)}%)`);
+                const modeText = data.mode === 'translation' ? 'Translation' : 'Transcription';
+                setStatus(`${modeText}: ${data.language} (${(data.language_probability * 100).toFixed(1)}%)`);
             }
         },
         onClose: () => {
@@ -146,6 +147,17 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: e
         shouldReconnect: (closeEvent) => true,
         reconnectInterval: 3000,
     });
+
+    // Send mode and language changes to server when they change
+    useEffect(() => {
+        if (readyState === 1) { // WebSocket is open
+            const message = {
+                mode: mode,
+                transcriptionLanguage: transcriptionLanguage
+            };
+            sendMessage(JSON.stringify(message));
+        }
+    }, [mode, transcriptionLanguage, readyState, sendMessage]);
 
     useEffect(() => {
         return () => {
@@ -177,20 +189,21 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: e
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '1rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', padding: '0.5rem', minHeight: 0 }}>
             <button
                 onClick={onToggleRecording || (isRecording ? stopRecordingHandler : startRecordingHandler)}
                 style={{
-                    padding: '1rem 2rem',
+                    padding: '0.5rem 1.2rem',
                     backgroundColor: isRecording ? '#ef4444' : '#ef4444',
                     color: 'white',
-                    fontSize: '1.125rem',
+                    fontSize: '1rem',
                     fontWeight: '600',
                     border: 'none',
                     borderRadius: '0.5rem',
                     cursor: (status === 'error' || status === 'disconnected') ? 'not-allowed' : 'pointer',
                     transition: 'background-color 0.2s',
-                    opacity: (status === 'error' || status === 'disconnected') ? 0.5 : 1
+                    opacity: (status === 'error' || status === 'disconnected') ? 0.5 : 1,
+                    minHeight: 0
                 }}
                 onMouseOver={(e) => {
                     if (status !== 'error' && status !== 'disconnected') {
@@ -206,11 +219,10 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: e
             >
                 {isRecording ? 'Stop Recording' : 'Start Recording'}
             </button>
-            
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minHeight: 0 }}>
                 <div style={{
-                    width: '1rem',
-                    height: '1rem',
+                    width: '0.75rem',
+                    height: '0.75rem',
                     borderRadius: '50%',
                     backgroundColor: 
                         status === 'recording' ? '#ef4444' :
@@ -221,31 +233,31 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: e
                     animation: status === 'recording' ? 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none'
                 }} />
                 <span style={{
-                    fontSize: '0.875rem',
+                    fontSize: '0.85rem',
                     color: 
                         status === 'error' ? '#dc2626' :
                         status === 'disconnected' ? '#d97706' :
-                        '#6b7280'
+                        '#6b7280',
+                    minHeight: 0
                 }}>
-                    {status === 'recording' ? 'Recording (300ms chunks)...' :
-                     status === 'connected' ? 'Ready - WebRTC Optimized' :
+                    {status === 'recording' ? `Recording (${mode === 'translation' ? 'Translation' : `Transcription - ${transcriptionLanguage === 'en' ? 'English' : 'German'}`} mode)...` :
+                     status === 'connected' ? `Ready - ${mode === 'translation' ? 'Translation' : `Transcription - ${transcriptionLanguage === 'en' ? 'English' : 'German'}`} Mode` :
                      status === 'error' ? error || 'Error' :
                      status === 'disconnected' ? 'Reconnecting...' :
                      'Initializing...'}
                 </span>
             </div>
-            
             {error && (
                 <div style={{
                     color: '#dc2626',
-                    fontSize: '0.875rem',
-                    marginTop: '0.5rem',
-                    textAlign: 'center'
+                    fontSize: '0.85rem',
+                    marginTop: '0.25rem',
+                    textAlign: 'center',
+                    minHeight: 0
                 }}>
                     {error}
                 </div>
             )}
-            
             <style jsx>{`
                 @keyframes pulse {
                     0%, 100% {

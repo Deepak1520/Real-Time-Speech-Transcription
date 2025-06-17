@@ -9,9 +9,15 @@ import time
 app = FastAPI()
 
 print("Loading Whisper.cpp model...")
-# whisper.cpp is faster than regular whisper
-model = Model('small.en', print_realtime=False, print_progress=False)
-print("Enhanced Whisper.cpp model (small.en) loaded and ready!")
+# Current configuration for limited processing power (CPU/Local machine)
+model = Model('small', print_realtime=False, print_progress=False)
+
+# model = Model('medium', print_realtime=False, print_progress=False)    # Good balance of accuracy and resources
+# model = Model('large-v1', print_realtime=False, print_progress=False)  # Better accuracy, more resources
+# model = Model('large-v2', print_realtime=False, print_progress=False)  # Improved over v1
+# model = Model('large-v3', print_realtime=False, print_progress=False)  # Latest and most accurate model
+
+print("Enhanced Whisper.cpp model (small - multilingual) loaded and ready!")
 
 # Audio settings
 SAMPLE_RATE = 16000
@@ -38,6 +44,8 @@ class ConnectionState:
         self.last_processing_time = time.time()
         self.energy_history = deque(maxlen=10)
         self.recent_transcriptions = deque(maxlen=5)
+        self.mode = "transcription"  # Default mode
+        self.transcription_language = "en"  # Default transcription language
 
 connections = {}
 
@@ -47,15 +55,37 @@ async def websocket_endpoint(websocket: WebSocket):
     connection_id = id(websocket)
     connections[connection_id] = ConnectionState()
     state = connections[connection_id]
-    
     print("WebSocket connection opened")
     
     try:
         while True:
             try:
-                # Get audio data
-                message = await websocket.receive_bytes()
-                audio_chunk = np.frombuffer(message, dtype=np.float32)
+                # Receive message and check its type
+                message = await websocket.receive()
+                
+                # Handle text messages (mode changes)
+                if "text" in message:
+                    try:
+                        data = json.loads(message["text"])
+                        if "mode" in data:
+                            state.mode = data["mode"]
+                            print(f"Mode set to: {state.mode}")
+                        if "transcriptionLanguage" in data:
+                            state.transcription_language = data["transcriptionLanguage"]
+                            print(f"Transcription language set to: {state.transcription_language}")
+                        await websocket.send_json({
+                            "type": "mode_set",
+                            "mode": state.mode,
+                            "transcriptionLanguage": state.transcription_language
+                        })
+                    except Exception as e:
+                        print(f"Error parsing mode message: {e}")
+                    continue
+                
+                # Handle binary messages (audio data)
+                elif "bytes" in message:
+                    audio_bytes = message["bytes"]
+                    audio_chunk = np.frombuffer(audio_bytes, dtype=np.float32)
                 
                 # Add to buffer
                 state.audio_buffer = np.concatenate((state.audio_buffer, audio_chunk))
@@ -72,25 +102,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
                 
                 if should_process:
-                    # Get audio to transcribe
                     processing_size = min(len(state.audio_buffer), PROCESSING_WINDOW_SAMPLES)
                     audio_chunk = state.audio_buffer[:processing_size]
-                    
-                    # Track energy levels
                     current_energy = np.sqrt(np.mean(audio_chunk**2))
                     state.energy_history.append(current_energy)
                     
-                    # Figure out dynamic threshold
                     if len(state.energy_history) >= 3:
                         avg_energy = np.mean(list(state.energy_history)[-5:])
                         dynamic_threshold = max(BASE_ENERGY_THRESHOLD, avg_energy * 0.6)
                     else:
                         dynamic_threshold = BASE_ENERGY_THRESHOLD
                     
-                    # Check energy level
                     has_sufficient_energy = current_energy > dynamic_threshold
-                    
-                    # Simple voice activity detection
                     vad_chunks = len(audio_chunk) // VAD_WINDOW_SAMPLES
                     speech_chunks = 0
                     for i in range(vad_chunks):
@@ -107,56 +130,57 @@ async def websocket_endpoint(websocket: WebSocket):
                         state.last_speech_time = time.time()
                         
                         try:
-                            # Run whisper.cpp
-                            segments = model.transcribe(audio_chunk)
-                            
-                            # Process results
+                            if state.mode == "translation":
+                                segments = model.transcribe(audio_chunk, task="translate")
+                            else:
+                                segments = model.transcribe(audio_chunk, language=state.transcription_language)
                             for segment in segments:
                                 text = segment.text.strip()
-                                
                                 if is_valid_transcription_enhanced(text, state):
-                                    # Fake info object for compatibility
-                                    mock_info = type('obj', (object,), {'language_probability': 0.95})()
-                                    
+                                    detected_language = state.transcription_language if state.mode != "translation" else "en"
                                     await websocket.send_json({
                                         "text": text,
                                         "start": segment.t0 / 100.0,
                                         "end": segment.t1 / 100.0,
-                                        "language": "en",
+                                        "language": detected_language,
                                         "language_probability": 0.95,
                                         "chunk_size_ms": len(audio_chunk) * 1000 // SAMPLE_RATE,
                                         "engine": "whisper.cpp",
                                         "confidence": 0.95,
                                         "energy": float(np.sqrt(np.mean(audio_chunk**2))),
+                                        "mode": state.mode,
                                         "is_final": True
                                     })
                                     state.previous_text = text
                                     state.recent_transcriptions.append(text.lower())
-                                    print(f"Enhanced transcription: '{text}' (audio: {len(audio_chunk) * 1000 // SAMPLE_RATE}ms, confidence: 0.95)")
-                        
+                                    print(f"Enhanced transcription: '{text}' (mode: {state.mode}, detected_lang: {detected_language}, audio: {len(audio_chunk) * 1000 // SAMPLE_RATE}ms, confidence: 0.95)")
                         except Exception as transcribe_error:
                             print(f"Transcription error: {transcribe_error}")
-                    
                     else:
                         state.silent_chunks_count += 1
-                        # Reset after silence
                         if state.silent_chunks_count >= SILENCE_CHUNKS_LIMIT:
                             state.previous_text = ""
                             state.recent_transcriptions.clear()
                             print("Context reset due to prolonged silence")
                     
-                    # Keep some overlap
                     if len(state.audio_buffer) > processing_size:
                         keep_size = min(OVERLAP_SIZE, len(state.audio_buffer) - processing_size)
                         state.audio_buffer = state.audio_buffer[processing_size - keep_size:]
                     else:
                         state.audio_buffer = np.array([], dtype=np.float32)
-                    
                     state.last_processing_time = time.time()
+                
+                # Handle other message types (like disconnect)
+                else:
+                    print(f"Received unknown message type: {message}")
                         
             except Exception as e:
-                print(f"Error processing audio chunk: {e}")
-                continue
+                print(f"Error processing message: {e}")
+                print(f"Error type: {type(e)}")
+                # Break on connection issues
+                if isinstance(e, Exception) and ("disconnect" in str(e).lower() or "connection" in str(e).lower()):
+                    break
+                continue  # Continue processing other messages
                 
     except Exception as e:
         print(f"WebSocket error: {e}")
@@ -307,7 +331,7 @@ async def get_config():
         "min_processing_ms": MIN_PROCESSING_MS,
         "overlap_duration_ms": OVERLAP_DURATION_MS,
         "sample_rate": SAMPLE_RATE,
-        "model": "small.en",
+        "model": "small",
         "engine": "whisper.cpp",
         "energy_threshold": BASE_ENERGY_THRESHOLD,
         "vad_enabled": True,
