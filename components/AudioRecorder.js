@@ -123,7 +123,7 @@ const AudioRecorder = ({ onTranscription, onRecordingStateChange, isRecording: e
         }
     }, [isRecording, onRecordingStateChange]);
     
-    const { sendMessage, lastMessage, readyState } = useWebSocket('ws://localhost:61999/ws', {
+    const { sendMessage, lastMessage, readyState } = useWebSocket('/ws', {
         onOpen: () => {
             console.log('WebSocket Connected');
             setStatus('connected');
