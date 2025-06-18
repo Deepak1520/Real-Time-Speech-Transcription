@@ -11,7 +11,7 @@ app = FastAPI()
 print("Loading Whisper model...")
 # Current configuration for limited processing power (CPU/Local machine)
 model = WhisperModel(
-    "medium",  # Changed from "small.en" to "small" for multilingual support
+    "small",  # Changed from "small.en" to "small" for multilingual support
     device="cpu", 
     compute_type="int8",
     cpu_threads=8,
@@ -131,12 +131,17 @@ async def websocket_endpoint(websocket: WebSocket):
                             
                             # Add translation task if in translation mode
                             if state.mode == "translation":
+                                print(f"\n[Translation Mode] Attempting to translate audio...")
                                 transcribe_params["task"] = "translate"
+                                print(f"[Translation Mode] Parameters set: {transcribe_params}")
                             else:
                                 # For transcription mode, force the selected language
                                 transcribe_params["language"] = state.transcription_language
+                                print(f"\n[Transcription Mode] Language set to: {state.transcription_language}")
                             
                             segments, info = model.transcribe(audio_chunk, **transcribe_params)
+                            print(f"[Processing] Model response - Language: {info.language if hasattr(info, 'language') else 'unknown'}, Probability: {info.language_probability if hasattr(info, 'language_probability') else 'unknown'}")
+                            
                             for segment in segments:
                                 text = segment.text.strip()
                                 if should_send_text_enhanced(text, info, state.previous_text):
@@ -145,6 +150,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                     if state.mode == "translation":
                                         # In translation mode, always show English as output language
                                         detected_language = "en"
+                                        print(f"[Translation Result] Original language detected: {info.language if hasattr(info, 'language') else 'unknown'}")
+                                        print(f"[Translation Result] Translated text: {text}")
                                     
                                     await websocket.send_json({
                                         "text": text,

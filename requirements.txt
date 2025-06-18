@@ -15,7 +15,6 @@ websockets>=12.0
 # Optional: For better performance
 torch>=2.0.0 
 
-# For cloud deployment with GPU support (uncomment when deploying to cloud):
 # cuda-python>=12.0.0  # NVIDIA CUDA Python bindings
 # torch>=2.0.0+cu118   # PyTorch with CUDA 11.8 support
 # ctranslate2>=3.24.0  # Required for faster-whisper GPU acceleration 

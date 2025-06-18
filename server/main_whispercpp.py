@@ -131,13 +131,22 @@ async def websocket_endpoint(websocket: WebSocket):
                         
                         try:
                             if state.mode == "translation":
+                                print(f"\n[Translation Mode] Attempting to translate audio using Whisper.cpp...")
                                 segments = model.transcribe(audio_chunk, task="translate")
+                                print(f"[Translation Mode] Translation task completed")
                             else:
+                                print(f"\n[Transcription Mode] Transcribing in language: {state.transcription_language}")
                                 segments = model.transcribe(audio_chunk, language=state.transcription_language)
+                            
                             for segment in segments:
                                 text = segment.text.strip()
                                 if is_valid_transcription_enhanced(text, state):
                                     detected_language = state.transcription_language if state.mode != "translation" else "en"
+                                    
+                                    if state.mode == "translation":
+                                        print(f"[Translation Result] Translated text: {text}")
+                                    else:
+                                        print(f"[Transcription Result] Text: {text}")
                                     await websocket.send_json({
                                         "text": text,
                                         "start": segment.t0 / 100.0,

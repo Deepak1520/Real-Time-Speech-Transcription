@@ -60,7 +60,7 @@ transcription_live_two_models/
 - **Purpose**: The core component that handles all audio recording and transcription
 - **Key Responsibilities**:
   - **Audio Capture**: Uses `navigator.mediaDevices.getUserMedia()` to access microphone
-  - **WebSocket Connection**: Establishes real-time connection to backend via `ws://localhost:8000/ws`
+  - **WebSocket Connection**: Establishes real-time connection to backend via `ws://localhost:61999/ws`
   - **Audio Processing**: 
     - Captures audio in chunks (16kHz sample rate)
     - Converts audio to Float32Array format
@@ -81,6 +81,15 @@ transcription_live_two_models/
   - **Resource Usage**: Displays processing time and buffer statistics
   - **Real-time Dashboard**: Shows live performance metrics during transcription
 
+#### `components/DetachableWrapper.js`
+- **Purpose**: React component for detaching the transcription display
+- **Key Features**:
+  - Allows users to detach the live transcription display into a separate browser window
+  - Users can click a button to open a dedicated, resizable popup window showing the current transcription in real time
+  - The detached window is styled for readability and includes a clear indicator that it is in "Detached Mode"
+  - The main window continues to control recording; the detached window is for viewing only
+  - This feature is useful for meetings, presentations, or multitasking, letting users keep the transcription visible while working in other tabs or apps
+
 ---
 
 ## Backend Architecture (Python FastAPI)
@@ -91,7 +100,7 @@ transcription_live_two_models/
 - **Purpose**: FastAPI server using the `faster-whisper` library
 - **Key Components**:
 
-**Model Setup**:
+**Model Setup (Flexible Model Selection)**:
 ```python
 from faster_whisper import WhisperModel
 model = WhisperModel("small.en", device="cpu", compute_type="int8")
@@ -99,6 +108,11 @@ model = WhisperModel("small.en", device="cpu", compute_type="int8")
 - Uses `small.en` model for English transcription
 - Optimized for CPU with int8 quantization
 - Multi-threaded processing (8 CPU threads, 4 workers)
+- The backend supports selecting different Whisper model sizes (`small`, `medium`, `large-v1`, `large-v2`, `large-v3`) depending on your hardware capacity and accuracy needs.
+- For local or low-resource environments, use `small` for fast, lightweight transcription.
+- For cloud or high-resource environments (with GPU/large RAM), you can uncomment and use larger models for better accuracy and translation quality.
+- Model selection and compute settings (CPU/GPU, quantization, threads) can be configured in `server/main.py` and `server/main_whispercpp.py`.
+- Trade-off: Larger models provide higher accuracy and better translation, but require more memory, compute power, and longer load times.
 
 **Audio Processing Pipeline**:
 - **Chunk Size**: 300ms chunks (4,800 samples at 16kHz)
@@ -123,13 +137,17 @@ model = WhisperModel("small.en", device="cpu", compute_type="int8")
 - **Purpose**: FastAPI server using the `pywhispercpp` library (direct C++ bindings)
 - **Key Differences from main.py**:
 
-**Model Setup**:
+**Model Setup (Flexible Model Selection)**:
 ```python
 from pywhispercpp.model import Model
-model = Model('small.en', print_realtime=False)
+model = Model('small', print_realtime=False)
+# For higher accuracy or translation, you can use 'medium', 'large-v1', 'large-v2', or 'large-v3' depending on your hardware.
 ```
-- Direct C++ implementation bindings
-- Lower-level access to whisper.cpp
+- The backend supports selecting different Whisper.cpp model sizes (`small`, `medium`, `large-v1`, `large-v2`, `large-v3`) based on your available CPU/RAM.
+- Use `small` for fast, lightweight transcription on local or low-resource machines.
+- Use larger models for better accuracy and translation support on more powerful hardware.
+- Model selection is controlled in `server/main_whispercpp.py`.
+- Trade-off: Larger models require more memory and CPU, but provide better results, especially for translation and multilingual tasks.
 
 **Enhanced Processing**:
 - **Larger Chunks**: 500ms chunks (8,000 samples)
@@ -165,7 +183,7 @@ npm run dev
 ```
 - **Purpose**: Launches the faster-whisper version
 - **Process**: Starts backend in background, then starts frontend
-- **Backend Port**: 8000 (FastAPI default)
+- **Backend Port**: 61999 (FastAPI custom port)
 - **Frontend Port**: 3000 (Next.js default)
 
 ### `start_whispercpp.sh`
@@ -178,6 +196,8 @@ npm run dev
 ```
 - **Purpose**: Launches the whisper.cpp version
 - **Same process**: Background backend + foreground frontend
+- **Backend Port**: 61999 (FastAPI custom port)
+- **Frontend Port**: 3000 (Next.js default)
 
 ---
 
@@ -185,7 +205,7 @@ npm run dev
 
 ### 1. Connection Establishment
 ```
-Browser → WebSocket connection → ws://localhost:8000/ws → FastAPI WebSocket handler
+Browser → WebSocket connection → ws://localhost:61999/ws → FastAPI WebSocket handler
 ```
 
 ### 2. Audio Capture & Transmission
@@ -210,8 +230,7 @@ Text result → JSON format → WebSocket.send() → Frontend → Display update
 ### Audio Configuration
 - **Sample Rate**: 16,000 Hz (standard for speech recognition)
 - **Format**: 32-bit Float (Float32Array)
-- **Channels**: Mono (single channel)
-- **Bit Depth**: 32-bit floating point
+
 
 ### Processing Parameters
 - **Faster-Whisper**: 300ms chunks, 1.2s processing window
@@ -220,8 +239,8 @@ Text result → JSON format → WebSocket.send() → Frontend → Display update
 - **VAD Threshold**: Dynamic based on ambient noise
 
 ### Model Specifications
-- **Model Size**: `small.en` (39MB, ~39M parameters)
-- **Language**: English optimized
+- **Model Size**: `small ` (39MB, ~39M parameters)
+- **Language**: English, German
 - **Quantization**: int8 for faster inference
 - **Memory Usage**: ~200MB RAM per instance
 
@@ -274,5 +293,23 @@ Text result → JSON format → WebSocket.send() → Frontend → Display update
 - **Audio Processing**: Graceful handling of malformed data
 - **Model Errors**: Fallback processing for transcription failures
 - **Memory Management**: Buffer cleanup and connection cleanup
+---
 
-This architecture provides a robust, scalable real-time transcription service with multiple AI backend options and comprehensive error handling. 
+### Translation Mode
+- Users can switch to Translation Mode from the frontend.
+- In Translation Mode, the backend will attempt to translate any spoken language to English using the Whisper model's translation capabilities.
+- Translation is triggered by sending `mode: "translation"` from the frontend to the backend via WebSocket.
+- The backend uses the `task="translate"` parameter for the model when in this mode.
+
+### Language Selection for Transcription
+- In Transcription Mode, users can select the language they are speaking.
+- The selected language is sent to the backend as `transcriptionLanguage`.
+- The backend uses this language for more accurate transcription.
+
+
+### Detachable Transcription Window (DetachableWrapper)
+- The `DetachableWrapper` React component allows users to detach the live transcription display into a separate browser window.
+- Users can click a button to open a dedicated, resizable popup window showing the current transcription in real time.
+- The detached window is styled for readability and includes a clear indicator that it is in "Detached Mode".
+- The main window continues to control recording; the detached window is for viewing only.
+- This feature is useful for meetings, presentations, or multitasking, letting users keep the transcription visible while working in other tabs or apps. 
