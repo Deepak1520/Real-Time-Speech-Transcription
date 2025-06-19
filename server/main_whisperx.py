@@ -121,4 +121,8 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             await websocket.close()
         except:
-            pass 
+            pass
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=61999, log_level="info") 
